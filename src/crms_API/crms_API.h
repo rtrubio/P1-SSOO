@@ -10,5 +10,6 @@ struct CrmsFile;
 void cr_mount(char*);
 void cr_ls_processes();
 void cr_start_process(int, char*);
+void cr_clean();
 
 /*int cr_write_file(CrmsFile*);*/

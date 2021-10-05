@@ -16,5 +16,16 @@ int main(int argc, char *argv[]) {
 	}
 
 	cr_mount(argv[1]);
+
 	cr_ls_processes();
+
+	printf("Iniciando procesos...\n");
+
+	cr_start_process(12, "PROCESS12");
+	cr_start_process(99, "PROCESS99");
+	cr_start_process(100, "PROCESS100");
+
+	cr_ls_processes();
+
+	cr_clean();
 }
