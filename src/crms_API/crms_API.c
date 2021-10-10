@@ -1,35 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <byteswap.h>
+#include <stdint.h>
 #include "crms_API.h"
 
-char *MEMORY_PATH = 0;
+char MEMORY_PATH[256];
 size_t PCB_ENTRY_SIZE = 256;
 size_t PCB_ENTRIES = 16;
 size_t PAGE_TABLE_SIZE = 32;
 
-/*typedef struct CrmsFile {
-	int pid;
-	char *filename;
-	size_t fsize;
-	int vpn;
-	unsigned int offset;
-	int entry_id;
-} CrmsFile;*/
-
-void cr_clean() {
-
-	if (MEMORY_PATH)
-		free(MEMORY_PATH);
-}
-
 void cr_mount(char* memory_path) {
-
-	if (MEMORY_PATH)
-		free(MEMORY_PATH);
-
-	int str_size = strlen(memory_path) + 1;
-	MEMORY_PATH = malloc(str_size * sizeof(char));
 	strcpy(MEMORY_PATH, memory_path);
 }
 
@@ -39,7 +20,7 @@ void cr_ls_processes() {
 	unsigned char pid[16][1];
 	unsigned char pname[16][13];
 
-	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
 	int start = 0;
 	int n = 0;
 
@@ -62,10 +43,10 @@ void cr_ls_processes() {
 		printf("No hay procesos ejecutando actualmente.\n");
 	else {
 		printf("\n");
-		printf("%3s | %12s\n", "PID", "NAME");
-		printf("----|-------------\n");
+		printf("Procesos activos:\n\n");
+		printf(" %4s   %-12s \n\n", "PID", "NAME");
 		for (int i = 0; i < n; i++) {
-			printf("%3i | %12s\n", (int)(pid[i][0]), (char*)(pname[i]));
+			printf(" %4i   %-12s \n", (int)(pid[i][0]), (char*)(pname[i]));
 		}
 		printf("\n");
 	}
@@ -105,7 +86,7 @@ void cr_start_process(int process_id, char* process_name) {
 	se crea la entrada en la tabla de PCB */
 
 	else if (empty_space != -1) {
-		position = 256*empty_space;
+		position = 256 * empty_space;
 
 		fseek(fptr, position, SEEK_SET);
 		unsigned char byte_buffer = 1;
@@ -128,6 +109,124 @@ void cr_start_process(int process_id, char* process_name) {
 	}
 
 	fclose(fptr);
+}
+
+int find_process(int process_id) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	unsigned char valid_byte[1];
+	unsigned char pid[1];
+
+	for (int i = 0; i < PCB_ENTRIES; i++) {
+		fseek(fptr, PCB_ENTRY_SIZE * i, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) {
+			fread(pid, 1, 1, fptr);
+			if ((int)(pid[0]) == process_id) {
+				fclose(fptr);
+				return i;
+			}
+		}
+	}
+
+	fclose(fptr);
+	return -1;
+}
+
+int find_file(int pcb_position, char* file_name) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	char valid_byte[1];
+	char fname_bytes[13];
+	fname_bytes[12] = '\0';
+
+	int position = PCB_ENTRY_SIZE * pcb_position + 14;
+
+	fseek(fptr, position, SEEK_SET);
+	for (int i = 0; i < 10; i++) {
+		fseek(fptr, position + i * 21, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+		if (valid_byte[0]) {
+			fread(fname_bytes, 1, 12, fptr);
+			if (!strcmp(fname_bytes, file_name)) {
+				fclose(fptr);
+				return i;
+			}
+		}	
+	}
+
+	fclose(fptr);
+	return -1;
+}
+
+unsigned long in_big_endian(unsigned char* bytes) {
+
+	unsigned int x = 1;
+	int y = (int)(((char*)&x)[0]);
+
+	if (y) {
+		uint32_t buffer;
+		memcpy(&buffer, bytes, 4);
+		return (unsigned long)(bswap_32(buffer));
+	}
+
+	else
+		return (unsigned long)(bytes);
+}
+
+CrmsFile* cr_open(int process_id, char* file_name, char mode) {
+	
+	if (mode == 'r') {
+		int pcb_position = find_process(process_id);
+		if (pcb_position == -1) {
+			printf("No existe un proceso con ID %i.\n", process_id);
+			return 0;
+		}
+
+		int file_position = find_file(pcb_position, file_name);
+		if (file_position == -1) {
+			printf("El proceso de ID %i no posee un archivo de nombre %s.\n",
+				process_id, file_name);
+			return 0;
+		}
+
+		FILE *fptr = fopen(MEMORY_PATH, "rb");
+
+		fseek(fptr,
+			PCB_ENTRY_SIZE * pcb_position + 14 + 21 * file_position + 1,
+			SEEK_SET);
+
+		unsigned char fsize_bytes[4];
+		unsigned char vdir_bytes[4];
+		char fname_bytes[13];
+		fname_bytes[12] = '\0';
+
+		fread(fname_bytes, 1, 12, fptr);
+		fread(fsize_bytes, 1, 4, fptr);
+		fread(vdir_bytes, 1, 4, fptr);
+		
+		unsigned long virtual_dir = in_big_endian(vdir_bytes);
+		unsigned long file_size = in_big_endian(fsize_bytes);
+
+		unsigned long mask;
+		mask = (1 << 23) - 1;
+		unsigned long offset = mask & virtual_dir;
+		mask = ((1 << 5) - 1) << 23;
+		unsigned long vpn = (mask & virtual_dir) >> 23;
+
+		CrmsFile *file = malloc(sizeof(CrmsFile));
+		file->pid = process_id;
+		file->filename = file_name;
+		file->filesize = file_size;
+		file->vpn = vpn;
+		file->offset = offset;
+
+		return file;
+	}
+
+	else
+		return 0;
 }
 
 /*
