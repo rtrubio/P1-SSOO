@@ -9,6 +9,8 @@ char MEMORY_PATH[256];
 size_t PCB_ENTRY_SIZE = 256;
 size_t PCB_ENTRIES = 16;
 size_t PAGE_TABLE_SIZE = 32;
+size_t FILE_DATA_ENTRY_SIZE = 21; // 1+12+4+4=validez+nombre+tamaño+dir
+size_t FILE_DATA_ENTRIES = 10;
 
 void cr_mount(char* memory_path) {
 	strcpy(MEMORY_PATH, memory_path);
@@ -50,6 +52,114 @@ void cr_ls_processes() {
 		}
 		printf("\n");
 	}
+}
+
+int cr_exists(int process_id, char* file_name) {
+
+	unsigned char valid_byte[1];
+	unsigned char valid_file_byte[1];
+	unsigned char pid[16][1];
+	unsigned char pname[16][13];
+	unsigned char filename[13]; // probar con 12
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	int start = 0;
+	int start_file = 0;
+	int n = 0;
+	int exists = 0;
+
+	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
+		fseek(fptr, start, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
+			fread(pid[n], 1, 1, fptr);
+			fread(pname[n], 1, 12, fptr);
+			pname[n][12] = '\0';
+			if(pid[n] == process_id){
+				// estamos en la data del proceso buscado
+				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
+				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES){
+				  // 1 byte para validez de la entrada
+				  fseek(fptr, start+start_file, SEEK_SET);
+				  fread(valid_file_byte, 1, 1, fptr);
+				  if(valid_file_byte[0]){
+					  fread(filename, 1, 12, fptr);
+					  if(filename == file_name){
+						  exists = 1;
+					  }
+				  }
+					start_file += FILE_DATA_ENTRY_SIZE;
+				}
+			}
+			n++;
+		}
+
+		start += PCB_ENTRY_SIZE;
+	}
+	fclose(fptr);
+	if(exists==1){
+		return 1;
+	}else{
+		return 0;
+	}
+}
+
+void cr_ls_files(int process_id) {
+
+	unsigned char valid_byte[1];
+	unsigned char valid_file_byte[1];
+	unsigned char pid[16][1];
+	unsigned char pname[16][13];
+	unsigned char filename[10][13]; // probar con 12
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	int start = 0;
+	int start_file = 0;
+	int n = 0;
+	int exists = 0;
+
+	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
+		fseek(fptr, start, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
+			fread(pid[n], 1, 1, fptr);
+			fread(pname[n], 1, 12, fptr);
+			pname[n][12] = '\0';
+			if(pid[n] == process_id){
+				// estamos en la data del proceso buscado
+				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
+				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES){
+				  // 1 byte para validez de la entrada
+				  fseek(fptr, start+start_file, SEEK_SET);
+				  fread(valid_file_byte, 1, 1, fptr);
+				  if(valid_file_byte[0]){
+					  fread(filename[n], 1, 12, fptr);
+					  filename[n][12] = '\0';
+				  }
+					start_file += FILE_DATA_ENTRY_SIZE;
+				}
+			}
+			n++;
+		}
+
+		start += PCB_ENTRY_SIZE;
+	}
+	fclose(fptr);
+
+	if (!n)
+		printf("No hay archivos actualmente para el proceso %i.\n", process_id);
+	else {
+		printf("\n");
+		printf("Archivos:\n\n");
+		printf(" %4s   %-12s \n\n", "PID", "FILENAME");
+		for (int i = 0; i < n; i++) {
+			printf(" %4i   %-12s \n", process_id, (char*)(filename[i]));
+		}
+		printf("\n");
+	}
+
 }
 
 void cr_start_process(int process_id, char* process_name) {
