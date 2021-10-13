@@ -225,6 +225,57 @@ void cr_start_process(int process_id, char* process_name) {
 	fclose(fptr);
 }
 
+void cr_finish_process(int process_id) {
+
+	unsigned char valid_byte[1];
+	unsigned char valid_file_byte[1];
+	unsigned char pid[1];
+	unsigned char pname[13];
+	//unsigned char filename[10][13]; // probar con 12
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	int start = 0;
+	int start_actual = 0;
+	int start_file = 0;
+	int n = 0;
+
+	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
+		fseek(fptr, start, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) { // iteramos en los procesos que sean validos
+			fread(pid, 1, 1, fptr);
+			if((int)(pid[0]) == process_id) { // buscamos el proceso que tenga id = process_id
+				fread(pname, 1, 12, fptr);
+				pname[12] = '\0';
+
+				start += 14;
+	
+				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES){ // iteramos en los archivos del proceso para "invalidarlos"
+				  fseek(fptr, start+start_file, SEEK_SET);
+				  fread(valid_file_byte, 1, 1, fptr);
+				  if(valid_file_byte[0]){
+
+					  // CAMBIAR VALOR DE BYTE DE VALIDEZ DE CADA ARCHIVO
+					  // se cambian con fwrite u otra manera??
+
+					  n++;
+				  }
+				}
+				start == start_actual; // seria lo mismo que restar 14 al start
+				fseek(fptr, start, SEEK_SET); // queremos volver a pararnos en el byte de validez del proceso con id = process_id
+
+				// CAMBIAR VALOR DE VALIDEZ DE BYTE DEL PROCESO
+				// se cambia con fwrite u otra manera??
+			}
+		}
+
+		start += PCB_ENTRY_SIZE;
+		start_actual += PCB_ENTRY_SIZE;
+	}
+	fclose(fptr);
+}
+
 int find_process(int process_id) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "rb");
