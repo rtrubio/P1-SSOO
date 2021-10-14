@@ -11,12 +11,14 @@ typedef struct CrmsFile {
 	unsigned long filesize;
 	unsigned long vpn;
 	unsigned long offset;
+	char mode;
+	int allocated;
 } CrmsFile;
 
 void cr_mount(char*);
 void cr_ls_processes();
-void cr_ls_files(int process_id);
-int cr_exists(int process_id, char* file_name);
 void cr_start_process(int, char*);
-/*int cr_write_file(CrmsFile*);*/
+int cr_write_file(CrmsFile*, void*, int);
 CrmsFile* cr_open(int, char*, char);
+void cr_ls_files(int);
+int cr_exists(int, char*);

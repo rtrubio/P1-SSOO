@@ -54,118 +54,6 @@ void cr_ls_processes() {
 	}
 }
 
-int cr_exists(int process_id, char* file_name) {
-
-	unsigned char valid_byte[1];
-	unsigned char valid_file_byte[1];
-	unsigned char pid[1];
-	char filename[13]; // probar con 12
-	filename[12] = '\0';
-
-	FILE *fptr = fopen(MEMORY_PATH, "rb");
-	int start = 0;
-	int start_file = 0;
-	int n = 0;
-	int exists = 0;
-
-	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
-		fseek(fptr, start, SEEK_SET);
-		fread(valid_byte, 1, 1, fptr);
-
-		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
-
-			fread(pid, 1, 1, fptr);
-
-			if ((int)(pid[0]) == process_id) {
-				start += 14;
-				// estamos en la data del proceso buscado
-				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
-				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES) {
-				  // 1 byte para validez de la entrada
-				  fseek(fptr, start + start_file, SEEK_SET);
-				  fread(valid_file_byte, 1, 1, fptr);
-
-				  if (valid_file_byte[0]) {
-					  fread(filename, 1, 12, fptr);
-
-					  if(!strcmp(filename, file_name)){
-						  exists = 1;
-					  }
-				  }
-					start_file += FILE_DATA_ENTRY_SIZE;
-				}
-			}
-			n++;
-		}
-
-		start += PCB_ENTRY_SIZE;
-	}
-	fclose(fptr);
-
-	if (exists) {
-		return 1;
-	} else {
-		return 0;
-	}
-}
-
-void cr_ls_files(int process_id) {
-
-	unsigned char valid_byte[1];
-	unsigned char valid_file_byte[1];
-	unsigned char pid[1];
-	unsigned char pname[13];
-	unsigned char filename[10][13]; // probar con 12
-
-	FILE *fptr = fopen(MEMORY_PATH, "rb");
-	int start = 0;
-	int start_file = 0;
-	int n = 0;
-
-	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
-		fseek(fptr, start, SEEK_SET);
-		fread(valid_byte, 1, 1, fptr);
-
-		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
-			fread(pid, 1, 1, fptr);
-			if((int)(pid[0]) == process_id) {
-				fread(pname, 1, 12, fptr);
-				pname[12] = '\0';
-
-				start += 14;
-				// estamos en la data del proceso buscado
-				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
-				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES){
-				  // 1 byte para validez de la entrada
-				  fseek(fptr, start+start_file, SEEK_SET);
-				  fread(valid_file_byte, 1, 1, fptr);
-				  if(valid_file_byte[0]){
-					  fread(filename[n], 1, 12, fptr);
-					  filename[n][12] = '\0';
-					  n++;
-				  }
-					start_file += FILE_DATA_ENTRY_SIZE;
-				}
-			}
-		}
-
-		start += PCB_ENTRY_SIZE;
-	}
-	fclose(fptr);
-
-	if (!n)
-		printf("No hay archivos para el proceso %i actualmente.\n\n", process_id);
-	else {
-		printf("\n");
-		printf("Archivos de %s [ID %i]:\n\n", pname, process_id);
-		for (int i = 0; i < n; i++) {
-			printf("%s%s\n", "  ", (char*)(filename[i]));
-		}
-		printf("\n");
-	}
-
-}
-
 void cr_start_process(int process_id, char* process_name) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "r+b");
@@ -290,13 +178,14 @@ unsigned long in_big_endian(unsigned char* bytes) {
 }
 
 CrmsFile* cr_open(int process_id, char* file_name, char mode) {
+
+	int pcb_position = find_process(process_id);
+	if (pcb_position == -1) {
+		printf("No existe un proceso con ID %i.\n", process_id);
+		return 0;
+	}
 	
 	if (mode == 'r') {
-		int pcb_position = find_process(process_id);
-		if (pcb_position == -1) {
-			printf("No existe un proceso con ID %i.\n", process_id);
-			return 0;
-		}
 
 		int file_position = find_file(pcb_position, file_name);
 		if (file_position == -1) {
@@ -326,6 +215,7 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		unsigned long mask;
 		mask = (1 << 23) - 1;
 		unsigned long offset = mask & virtual_dir;
+
 		mask = ((1 << 5) - 1) << 23;
 		unsigned long vpn = (mask & virtual_dir) >> 23;
 
@@ -335,83 +225,594 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		file->filesize = file_size;
 		file->vpn = vpn;
 		file->offset = offset;
+		file->mode = 'r';
+		file->allocated = 1;
 
+		fclose(fptr);
 		return file;
 	}
 
-	else
-		return 0;
+	else if (mode == 'w') {
+
+		CrmsFile *file = malloc(sizeof(CrmsFile));
+		file->pid = process_id;
+		file->filename = file_name;
+		file->mode = 'w';
+		file->allocated = 0;
+		return file;
+	}
 }
 
-/*
-int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
+int cr_exists(int process_id, char* file_name) {
 
 	unsigned char valid_byte[1];
+	unsigned char valid_file_byte[1];
 	unsigned char pid[1];
+	char filename[13]; // probar con 12
+	filename[12] = '\0';
 
-	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
 	int start = 0;
-	int p_found = 0;
+	int start_file = 0;
+	int n = 0;
+	int exists = 0;
 
 	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
 		fseek(fptr, start, SEEK_SET);
 		fread(valid_byte, 1, 1, fptr);
 
-		if (valid_byte[0]) {
+		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
+
 			fread(pid, 1, 1, fptr);
 
-			if ((int)pid[0] == file_desc->pid) {
-				p_found = 1;
-				fseek(fptr, start + 14, SEEK_SET);
-				break;
+			if ((int)(pid[0]) == process_id) {
+				start += 14;
+				// estamos en la data del proceso buscado
+				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
+				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES) {
+				  // 1 byte para validez de la entrada
+				  fseek(fptr, start + start_file, SEEK_SET);
+				  fread(valid_file_byte, 1, 1, fptr);
+
+				  if (valid_file_byte[0]) {
+					  fread(filename, 1, 12, fptr);
+
+					  if(!strcmp(filename, file_name)){
+						  exists = 1;
+					  }
+				  }
+					start_file += FILE_DATA_ENTRY_SIZE;
+				}
 			}
+			n++;
 		}
+
 		start += PCB_ENTRY_SIZE;
 	}
-	 
+	fclose(fptr);
 
-	if (p_found) {
-
-		Se busca un espacio vacío y se guarda la dirección
-		del archivo anterior y del archivo siguiente, si existen.
-
-		int empty_space = -1;
-		unsigned char prev_address[4];
-		unsigned char next_address[4];
-
-		for (int i = 0; i < 10; i++) {
-			fread(valid_byte, 1, 1, fptr);
-
-			if (!valid_byte[0] && empty_space == -1) {
-				empty_space = i;
-				if (0 < i) {
-					fseek(fptr, -5, SEEK_CUR);
-					fread(prev_address, 1, 4, fptr);
-					fseek(fptr, 1, 21, SEEK_CUR);
-				}
-				fseek(fptr, 1, 20, SEEK_CUR);
-			}
-			else if (valid_byte[0] && empty_space != -1) {
-				fseek(fptr, 16, SEEK_CUR);
-				fread(next_address, 1, 4, fptr);
-				break;
-			}
-			else {
-				fseek(fptr, 1, 20, SEEK_CUR);
-			}
-		}
-
-		if (empty_space == -1) {
-			printf("No hay espacio disponible para la entrada de un nuevo archivo.\n");
-		}
-		else {
-
-		}
-
+	if (exists) {
+		return 1;
+	} else {
+		return 0;
 	}
+}
+
+void cr_ls_files(int process_id) {
+
+	unsigned char valid_byte[1];
+	unsigned char valid_file_byte[1];
+	unsigned char pid[1];
+	unsigned char pname[13];
+	char filename[10][13];
+	unsigned long fsize[10];
+	unsigned long offset[10];
+	unsigned long vpn[10];
+
+	CrmsFile *file;
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+	int start = 0;
+	int start_file = 0;
+	int n = 0;
+
+	while (start < PCB_ENTRY_SIZE * PCB_ENTRIES) {
+		fseek(fptr, start, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) { // **revisar si nos interesan los activos o todos
+			fread(pid, 1, 1, fptr);
+			if((int)(pid[0]) == process_id) {
+				fread(pname, 1, 12, fptr);
+				pname[12] = '\0';
+
+				start += 14;
+				// estamos en la data del proceso buscado
+				// hay 10 sub entradas con data de archivos, cada una de 21 bytes
+				while(start_file < FILE_DATA_ENTRY_SIZE * FILE_DATA_ENTRIES){
+				  // 1 byte para validez de la entrada
+				  fseek(fptr, start+start_file, SEEK_SET);
+				  fread(valid_file_byte, 1, 1, fptr);
+				  if(valid_file_byte[0]){
+					fread(filename[n], 1, 12, fptr);
+					filename[n][12] = '\0';
+
+					file = cr_open(process_id, filename[n], 'r');
+					offset[n] = file->offset;
+					vpn[n] = file->vpn;
+					fsize[n] = file->filesize;
+
+					free(file);
+
+					n++;
+				  }
+					start_file += FILE_DATA_ENTRY_SIZE;
+				}
+			}
+		}
+
+		start += PCB_ENTRY_SIZE;
+	}
+	fclose(fptr);
+
+	if (!n)
+		printf("No hay archivos para el proceso %i actualmente.\n\n", process_id);
 	else {
-		printf("No existe proceso válido asociado al archivo.\n");
+		printf("\n");
+		printf("Archivos de %s [ID %i]:\n\n", pname, process_id);
+		printf("%12s | %-10s %-10s %-10s\n", "NAME", "VPN", "OFFSET", "SIZE");
+		for (int i = 0; i < n; i++) {
+			printf("%12s | %-10lu %-10lu %-10lu\n", (char*)(filename[i]),
+				vpn[i], offset[i], fsize[i]);
+		}
+		printf("\n");
+	}
+
+}
+
+int get_fpn(unsigned char byte) {
+
+	return (int)((unsigned char)(byte << 1) >> 1);
+}
+
+int valid_page_entry(unsigned char byte) {
+
+	return (int)(byte >> 7);
+}
+
+void min_offset(int pid, int vpn, unsigned long offset, unsigned long* w_offset) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	unsigned long pos = PCB_ENTRY_SIZE * find_process(pid) + 14;
+	unsigned long min_offset = (1 << 23);
+	unsigned char valid_byte[1];
+	unsigned char vdir[10][4];
+	int n = 0;
+
+	for (int i = 0; i < 10; i++) {
+		fseek(fptr, pos + i * 21, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) {
+			fseek(fptr, 16, SEEK_CUR);
+			fread(vdir[n], 1, 4, fptr);
+			n++;
+		}
+	}
+
+	unsigned long cur_vdir, cur_vpn, cur_offset;
+	unsigned long mask;
+	
+	for (int i = 0; i < n; i++) {
+		cur_vdir = in_big_endian(vdir[i]);
+		mask = ((1 << 5) - 1) << 23;
+		cur_vpn = (mask & cur_vdir) >> 23;
+
+		if (cur_vpn == vpn) {
+			mask = (1 << 23) - 1;
+			cur_offset = mask & cur_vdir;
+
+			if (cur_offset < min_offset && offset <= cur_offset) {
+				min_offset = cur_offset;
+			}
+		}
+	}
+
+	(*w_offset) = min_offset;
+	fclose(fptr);
+}	
+
+void max_offset(int pid, int vpn, unsigned long* offset) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	unsigned long pos = PCB_ENTRY_SIZE * find_process(pid) + 14;
+	unsigned long max_offset = 0;
+	int found = 0;
+	unsigned char valid_byte[1];
+	unsigned char vdir[10][4];
+	unsigned char size[10][4];
+	unsigned long size_ = 0;
+	int n = 0;
+
+	for (int i = 0; i < 10; i++) {
+		fseek(fptr, pos + i * 21, SEEK_SET);
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) {
+			printf("lole!!!\n");
+			fseek(fptr, 12, SEEK_CUR);
+			fread(size[n], 1, 4, fptr);
+			fread(vdir[n], 1, 4, fptr);
+			n++;
+		}
+	}
+
+	unsigned long cur_vdir, cur_vpn, cur_offset;
+	unsigned long mask;
+	
+	for (int i = 0; i < n; i++) {
+		cur_vdir = in_big_endian(vdir[i]);
+		mask = ((1 << 5) - 1) << 23;
+		cur_vpn = (mask & cur_vdir) >> 23;
+
+		if (cur_vpn == vpn) {
+			mask = (1 << 23) - 1;
+			cur_offset = mask & cur_vdir;
+
+			if (cur_offset > max_offset || !found) {
+				found = 1;
+				max_offset = cur_offset;
+				size_ = in_big_endian(size[i]);
+			}
+		}
+	}
+
+	(*offset) = max_offset + size_;
+	fclose(fptr);
+}
+
+
+int find_available_frame() {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	unsigned int x = 1;
+	int y = (int)(((char*)&x)[0]);
+
+	unsigned char byte[1];
+	unsigned char temp[1];
+
+	for (int i = 0; i < 16; i++) {
+		fseek(fptr, (1 << 12) + i, SEEK_SET);
+		fread(byte, 1, 1, fptr);
+		memcpy(temp, byte, 1);
+
+		if (y) {
+			for (int k = 0; k < 8; k++) {
+				if (!(temp[0] & 1)) {
+					fclose(fptr);
+					return (i * 8 + k);
+				}
+				temp[0] = temp[0] >> 1;
+			}
+		}
 	}
 
 	fclose(fptr);
-} */
+	return -1;
+}
+
+void frame_page_association(int pid, int vpn, int fpn) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+	unsigned char byte[1];
+
+	fseek(fptr,
+		PCB_ENTRY_SIZE * (find_process(pid) + 1) - PAGE_TABLE_SIZE,
+		SEEK_SET);
+
+	fseek(fptr, vpn, SEEK_CUR);
+	
+	byte[0] = (unsigned char)(fpn) | (1 << 7);
+	fwrite(byte, 1, 1, fptr);
+
+	fclose(fptr);
+}
+
+void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	int pentry = find_process(file->pid);
+	unsigned char valid_byte[1];
+	char fname[13];
+	unsigned long fsize_bytes;
+	unsigned char vdir[4] = {0, 0, 0, 0};
+	unsigned char fsize[4];
+
+	if (!(file->allocated)) {
+		file->allocated = 1;
+		for (int i = 0; i < 10; i++) {
+
+			fseek(fptr,
+				PCB_ENTRY_SIZE * pentry + 14 + 21 * i,
+				SEEK_SET);
+
+			fread(valid_byte, 1, 1, fptr);
+			if (!(valid_byte[0])) {
+
+				vdir[0] = (int)(vpn & (((1 << 4) - 1) << 1)) >> 1;
+				vdir[1] = (int)((unsigned long)(offset & (((1 << 7) - 1) << 16)) >> 16);
+				vdir[1] = (vpn & 1) << 7 | vdir[1];
+				vdir[2] = (unsigned long)(offset & (((1 << 8) - 1) << 8)) >> 8;
+				vdir[3] = offset & ((1 << 8) - 1);
+
+				memcpy(fsize, &(file->filesize), 4);
+				fsize_bytes = in_big_endian(fsize);
+				memcpy(fsize, &fsize_bytes, 4);
+
+				strcpy(fname, file->filename);
+				fname[12] = '\0';
+				int size_str = strlen(file->filename);
+
+				if (size_str > 12)
+					size_str = 12;
+
+				fseek(fptr,
+					PCB_ENTRY_SIZE * pentry + 14 + 21 * i,
+					SEEK_SET);
+				unsigned char byte[1] = {1};
+				fwrite(byte, 1, 1, fptr);
+
+				fseek(fptr,
+					PCB_ENTRY_SIZE * pentry + 14 + 21 * i + 1,
+					SEEK_SET);
+				fwrite(fname, size_str, 1, fptr);
+
+				fseek(fptr,
+					PCB_ENTRY_SIZE * pentry + 14 + 21 * i + 13,
+					SEEK_SET);
+				fwrite(fsize, 4, 1, fptr);
+
+				fseek(fptr,
+					PCB_ENTRY_SIZE * pentry + 14 + 21 * i + 17,
+					SEEK_SET);
+				fwrite(vdir, 4, 1, fptr);
+
+				printf("Offset %lu, VPN %i\n", offset, vpn);
+
+				break;
+			}
+		}
+	} else {
+
+		int position = find_file(find_process(file->pid), file->filename);
+
+		if (position == -1) {
+			printf("El archivo ya no existe.\n");
+		}
+
+		fseek(fptr,
+				PCB_ENTRY_SIZE * pentry + 14 + 21 * position,
+				SEEK_SET);
+
+		fread(valid_byte, 1, 1, fptr);
+
+		if (valid_byte[0]) {
+			fseek(fptr,
+				PCB_ENTRY_SIZE * pentry + 14 + 21 * position + 13,
+				SEEK_SET);
+			memcpy(fsize, &(file->filesize), 4);
+			fsize_bytes = in_big_endian(fsize);
+			memcpy(fsize, &fsize_bytes, 4);
+
+			fwrite(fsize, 4, 1, fptr);
+		} else {
+			printf("El archivo ya no existe.\n");
+		}
+
+	}
+
+	fclose(fptr);
+}
+
+int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
+
+	if (file_desc->mode != 'w') {
+		printf("El archivo %s es de solo lectura.\n", file_desc->filename);
+		return 0;
+	}
+
+	int pentry = find_process(file_desc->pid);
+
+	if (pentry == -1) {
+		printf("El proceso de ID %i ya no se encuentra activo.\n", file_desc->pid);
+		return 0;
+	}
+
+	if (find_file(pentry, file_desc->filename) == -1 && file_desc->allocated) {
+		printf("El archivo ya no existe.\n");
+		file_desc->allocated = 0;
+		return 0;
+	} 
+
+	if (find_file(pentry, file_desc->filename) != -1 && file_desc->allocated == 0) {
+		printf("Ya existe un archivo de nombre %s.\n", file_desc->filename);
+		return 0;
+	}
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	int position = PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE;
+	fseek(fptr, position, SEEK_SET);
+
+	unsigned char byte[1];
+	int first_empty_vp = -1;
+	unsigned long start_offset = 0;
+	int vpn = 0;
+	unsigned char vpn_byte[1];
+	int fpn;
+
+	if (!(file_desc->allocated)) {
+		for (int i = 0; i < PAGE_TABLE_SIZE; i++) {
+			fseek(fptr, position + i, SEEK_SET);
+			fread(byte, 1, 1, fptr);
+
+			printf("Página número %i libre:", i);
+			
+			if (!valid_page_entry(byte[0])) {
+				printf(" sí.\n");
+				first_empty_vp = i;
+				break;
+			} else printf(" no.\n");
+		}
+
+		if (first_empty_vp != 0) {
+
+			if (first_empty_vp == -1)
+				first_empty_vp = 32;
+
+			vpn = first_empty_vp - 1;
+
+			max_offset(file_desc->pid, vpn, &start_offset);
+
+			int k = 1;
+			while (!start_offset && k <= vpn) {
+				max_offset(file_desc->pid, vpn - k, &start_offset);
+				k++;
+				if (start_offset) {
+					start_offset = start_offset % (1 << 23);
+					break;
+				}
+			}
+
+			if (start_offset == (1 << 23)) {
+				start_offset = 0;
+				vpn++;
+			}
+
+		}
+
+		if (vpn >= 32) {
+			printf("No queda memoria virtual.\n");
+			return 0;
+		}
+
+		fseek(fptr,
+			PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+			SEEK_SET);
+
+
+		fread(vpn_byte, 1, 1, fptr);
+
+		if (valid_page_entry(vpn_byte[0]))
+			fpn = get_fpn(vpn_byte[0]);
+		else {
+			fpn = find_available_frame();
+			if (fpn == -1) {
+				printf("No quedan frames disponibles.\n");
+				fclose(fptr);
+				return 0;
+			} else {
+				frame_page_association(file_desc->pid, vpn, fpn);
+			}
+		}
+	}
+		
+	unsigned long abs_dir = (1 << 12) + (1 << 4) + ((1 << 23) * fpn);
+	unsigned long limit;
+	int written = 0;
+	int pos, start_vpn;
+
+	if (file_desc->allocated) {
+		min_offset(file_desc->pid,
+			file_desc->vpn, file_desc->offset, &limit);
+
+		if (limit == file_desc->offset) {
+			printf("No queda espacio contiguo en la memoria.");
+			fclose(fptr);
+			return 0;
+		}
+
+		pos = file_desc->offset;
+		start_vpn = file_desc->vpn;
+	} else {
+		limit = 1 << 23;
+		file_desc->vpn = vpn;
+		file_desc->offset = start_offset;
+		file_desc->filesize = 0;
+		start_vpn = vpn;
+		pos = start_offset;
+	}
+
+	while (1) {
+
+		fseek(fptr, abs_dir + pos, SEEK_SET);
+		fwrite(buffer + written, 1, 1, fptr);
+		file_desc->filesize += 1;
+		file_desc->offset += 1;
+		written++;
+		pos++;
+
+		if (written == n_bytes) {
+			write_file_entry(file_desc, start_vpn, start_offset);
+			file_desc->allocated = 1;
+			fclose(fptr);
+			return written;
+		}
+
+		if (start_offset + pos == limit) {
+			vpn++;
+
+			if (limit < (1 << 23) || vpn >= 32) {
+				printf("No queda memoria contigua.\n");
+				write_file_entry(file_desc, start_vpn, start_offset);
+				file_desc->allocated = 1;
+				fclose(fptr);
+				return written;
+			}
+
+			file_desc->vpn = vpn;
+			file_desc->offset = 0;
+
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+				SEEK_SET);
+
+			fread(vpn_byte, 1, 1, fptr);
+			if (valid_page_entry(vpn_byte[0])) {
+				fpn = get_fpn(vpn_byte[0]);
+				abs_dir = (1 << 12) + (1 << 4) + ((1 << 23) * fpn);
+				pos = 0;
+				min_offset(file_desc->pid, vpn, 0, &limit);
+
+				if (limit == 0) {
+					write_file_entry(file_desc, start_vpn, start_offset);
+					file_desc->allocated = 1;
+					printf("No queda memoria contigua.\n");
+					fclose(fptr);
+					return written;
+				}
+
+			} else {
+				fpn = find_available_frame();
+
+				if (fpn == -1) {
+					write_file_entry(file_desc, start_vpn, start_offset);
+					file_desc->allocated = 1;
+					printf("No quedan frames disponibles.\n");
+					fclose(fptr);
+					return written;
+				}
+
+				frame_page_association(file_desc->pid, vpn, fpn);
+				abs_dir = (1 << 12) + (1 << 4) + ((1 << 23) * fpn);
+				pos = 0;
+				limit = (1 << 23);
+			}
+		}
+
+	}
+}
