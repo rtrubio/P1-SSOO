@@ -37,6 +37,4 @@ int main(int argc, char *argv[]) {
 	}
 
 	cr_mount(argv[1]);
-
-	
 }

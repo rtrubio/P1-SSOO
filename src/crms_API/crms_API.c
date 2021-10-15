@@ -184,16 +184,10 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		printf("No existe un proceso con ID %i.\n", process_id);
 		return 0;
 	}
+
+	int file_position = find_file(pcb_position, file_name);
 	
-	if (mode == 'r') {
-
-		int file_position = find_file(pcb_position, file_name);
-		if (file_position == -1) {
-			printf("El proceso de ID %i no posee un archivo de nombre %s.\n",
-				process_id, file_name);
-			return 0;
-		}
-
+	if (mode == 'r' && file_position != -1) {
 		FILE *fptr = fopen(MEMORY_PATH, "rb");
 
 		fseek(fptr,
@@ -232,7 +226,13 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		return file;
 	}
 
-	else if (mode == 'w') {
+	if (mode == 'r' && file_position == -1) {
+		printf("El proceso de ID %i no posee un archivo de nombre %s.\n",
+			process_id, file_name);
+		return 0;
+	}
+
+	if (mode == 'w' && file_position == -1) {
 
 		CrmsFile *file = malloc(sizeof(CrmsFile));
 		file->pid = process_id;
@@ -240,6 +240,12 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		file->mode = 'w';
 		file->allocated = 0;
 		return file;
+	}
+
+	if (mode == 'w' && file_position != -1) {
+
+		printf("El archivo ya existe y no se puede escribir.\n");
+		return 0;
 	}
 }
 
@@ -815,4 +821,49 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		}
 
 	}
+}
+
+void cr_finish_process(int process_id) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	int fentry = find_process(process_id);
+	unsigned char byte[1];
+	int fpn;
+	unsigned long position;
+	unsigned char mask;
+
+	if (fentry == -1) {
+		printf("No existe un proceso con ID %i\n", process_id);
+		return;
+	}
+
+	for (int i = 0; i < 32; i++) {
+		position = PCB_ENTRY_SIZE * (fentry + 1) - PAGE_TABLE_SIZE + i;
+			
+		fseek(fptr, position, SEEK_SET);
+		fread(byte, 1, 1, fptr);
+
+		if (valid_page_entry(byte[0])) {
+
+			fpn = get_fpn(byte[0]);
+			byte[0] = 0;
+			fseek(fptr, position, SEEK_SET);
+			fwrite(byte, 1, 1, fptr);
+
+			fseek(fptr, (1 << 12) + (1 << 4) + fpn / 8, SEEK_SET);
+			fread(byte, 1, 1, fptr);
+			mask = (1 << (7 - (fpn % 8)));
+			byte[0] = byte[0] ^ mask;
+
+			fseek(fptr, (1 << 12) + (1 << 4) + fpn / 8, SEEK_SET);
+			fwrite(byte, 1, 1, fptr);
+		}
+	}
+
+	fseek(fptr, PCB_ENTRY_SIZE * fentry, SEEK_SET);
+	byte[0] = 0;
+	fwrite(byte, 1, 1, fptr);
+
+	fclose(fptr);
 }

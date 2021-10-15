@@ -22,3 +22,4 @@ int cr_write_file(CrmsFile*, void*, int);
 CrmsFile* cr_open(int, char*, char);
 void cr_ls_files(int);
 int cr_exists(int, char*);
+void cr_finish_process(int);
