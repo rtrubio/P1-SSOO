@@ -37,4 +37,15 @@ int main(int argc, char *argv[]) {
 	}
 
 	cr_mount(argv[1]);
+
+	CrmsFile *file = cr_open(0, "message.txt", 'r');
+
+	cr_ls_files(0);
+
+	cr_delete_file(file);
+
+	cr_ls_files(0);
+/*
+	cr_ls_files(0);
+	cr_ls_files(1);*/
 }

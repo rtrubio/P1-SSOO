@@ -829,19 +829,19 @@ void cr_finish_process(int process_id) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "r+b");
 
-	int fentry = find_process(process_id);
+	int pentry = find_process(process_id);
 	unsigned char byte[1];
 	int fpn;
 	unsigned long position;
 	unsigned char mask;
 
-	if (fentry == -1) {
+	if (pentry == -1) {
 		printf("No existe un proceso con ID %i\n", process_id);
 		return;
 	}
 
 	for (int i = 0; i < 32; i++) {
-		position = PCB_ENTRY_SIZE * (fentry + 1) - PAGE_TABLE_SIZE + i;
+		position = PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + i;
 			
 		fseek(fptr, position, SEEK_SET);
 		fread(byte, 1, 1, fptr);
@@ -866,14 +866,200 @@ void cr_finish_process(int process_id) {
 
 	byte[0] = 0;
 	for (int i = 0; i < 10; i++) {
-		position = PCB_ENTRY_SIZE * fentry + 14 + i * 21;
+		position = PCB_ENTRY_SIZE * pentry + 14 + i * 21;
 		fseek(fptr, position, SEEK_SET);
 		fwrite(byte, 1, 1, fptr);
 	}
 
-	fseek(fptr, PCB_ENTRY_SIZE * fentry, SEEK_SET);
+	fseek(fptr, PCB_ENTRY_SIZE * pentry, SEEK_SET);
 	byte[0] = 0;
 	fwrite(byte, 1, 1, fptr);
 
 	fclose(fptr);
+}
+
+void invalidate_frame(int fpn) {
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+	unsigned char byte[1] = {0};
+	unsigned char mask;
+
+	fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
+	fread(byte, 1, 1, fptr);
+	mask = (1 << (7 - (fpn % 8)));
+	byte[0] = byte[0] ^ mask;
+	fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
+	fwrite(byte, 1, 1, fptr);
+
+	fclose(fptr);
+}
+
+void cr_delete_file(CrmsFile* file_desc) {
+
+	// Restricciones
+	/*
+	if (file_desc->mode != 'w') {
+		printf("El archivo %s [PID = %i] está abierto en solo lectura.\n",
+			file_desc->filename, file_desc->pid);
+		return;
+	}*/
+
+	if (!(file_desc->allocated)) {
+		printf("El archivo %s [PID = %i] no se ha escrito en memoria aún.\n",
+			file_desc->filename, file_desc->pid);
+	}
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+
+	// Encontrar el número de entrada en el PCB del proceso asociado al archivo.
+	// Ídem para el número de entrada del archivo dentro del proceso.
+	int pentry = find_process(file_desc->pid);
+	int fentry = find_file(pentry, file_desc->filename);	
+
+	printf("pentry %i, fentry %i\n", pentry, fentry);
+
+
+	// Se invalida la entrada del archivo en el proceso.
+	fseek(fptr,
+		PCB_ENTRY_SIZE * pentry + 14 + 21 * fentry, SEEK_SET);
+	unsigned char byte[1] = {0};
+	fwrite(byte, 1, 1, fptr);
+
+
+	// Todo esto es para conseguir el VPN, el offset y el tamaño del archivo.
+	fseek(fptr,
+		PCB_ENTRY_SIZE * pentry + 14 + 21 * fentry + 13, SEEK_SET);
+
+	unsigned char fsize_bytes[4] = {0};
+	unsigned char vdir_bytes[4] = {0};
+	fread(fsize_bytes, 1, 4, fptr);
+	fread(vdir_bytes, 1, 4, fptr);
+		
+	unsigned long virtual_dir = in_big_endian(vdir_bytes);
+	unsigned long file_size = in_big_endian(fsize_bytes);
+
+	unsigned long mask;
+	mask = (1 << 23) - 1;
+	unsigned long offset = mask & virtual_dir;
+
+	mask = ((1 << 5) - 1) << 23;
+	unsigned long vpn = (mask & virtual_dir) >> 23;
+
+	// Hay que sumar el offset + el tamaño de la página,
+	// y ver cuántas páginas se extiende hacia arriba el archivo actual.
+	// Hay que revisar la máxima página en la que el archivo está escrito,
+	// en caso de que quede vacía al borrarlo.
+	// (además de todas las páginas que el archivo ocupa por completo,
+	// si existen)
+
+	int occupying = (offset + file_size) / (1 << 23); // (1 << 23) = 2^23 = 8MiB
+	unsigned long residue = (offset + file_size) % (1 << 23);
+	unsigned long upper_bound, lower_bound;
+	int temp_fpn;
+
+	if (occupying) {
+
+		for (int i = 1; i < occupying; i++) {
+			// Estas son las páginas intermedias,
+			// se invalidan porque el archivo las ocupa completas.
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + i,
+				SEEK_SET);
+			fread(byte, 1, 1, fptr);
+
+			temp_fpn = get_fpn(byte[0]);
+			invalidate_frame(temp_fpn);
+
+			printf("FPN %i invalidado.\n", temp_fpn);
+			
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + i,
+				SEEK_SET);
+			byte[0] = 0;
+			fwrite(byte, 1, 1, fptr);
+		}
+
+		// Ahora revisamos la última, con VPN = vpn + occupying
+		upper_bound = 0;
+		min_offset(file_desc->pid, vpn + occupying, 0, &upper_bound);
+
+		// min_offset deja upper_bound en 1 << 23 = 2^23 si no hay nada arriba.
+		// Si no hay nada, hay que invalidar la página y el frame.
+		if (upper_bound == (1 << 23)) {
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + occupying,
+				SEEK_SET);
+			fread(byte, 1, 1, fptr);
+
+			temp_fpn = get_fpn(byte[0]);
+			invalidate_frame(temp_fpn);
+
+			printf("FPN %i invalidado.\n", temp_fpn);
+
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + occupying,
+				SEEK_SET);
+			byte[0] = 0;
+			fwrite(byte, 1, 1, fptr);
+		}
+
+
+	} else {
+	// Ahora revisamos si hay un archivo EN LA MISMA PÁGINA,
+	// arriba del que queremos borrar.
+		upper_bound = 0;
+		min_offset(file_desc->pid, vpn, 0, &upper_bound);
+
+		if (upper_bound < (1 << 23)) {
+			printf("There still are files in VPN %i\n", vpn);
+			return;
+		}
+	}
+
+	// Revisamos si hay un archivo abajo en la misma página.
+	// Puede ser que no comienze en esta página, así que hay que buscar
+	// en las páginas de abajo.
+
+	lower_bound = 0;
+	max_offset(file_desc->pid, vpn, &lower_bound);
+	int k = 1;
+	while (!lower_bound && k <= vpn) {
+		max_offset(file_desc->pid, vpn - k, &lower_bound);
+		k++;
+	}
+
+	if (lower_bound) {
+		int cur_vpn = vpn - (k - 1);
+		if (lower_bound > (vpn - cur_vpn) * (1 << 23)) {
+			printf("There still are files in VPN %i\n", vpn);
+			return;
+		}
+	}
+	printf("There are no more files in VPN %i.\n", vpn);
+
+
+	// Si nada de esto pasa, hay que invalidar el frame y la página.
+	fseek(fptr,
+		PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+		SEEK_SET);
+	fread(byte, 1, 1, fptr);
+
+	// Se consigue el FPN de la página antes de invalidarla.
+	int fpn = get_fpn(byte[0]);
+	
+	// Se invalida la página.
+	fseek(fptr,
+		PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+		SEEK_SET);
+	byte[0] = 0;
+	fwrite(byte, 1, 1, fptr);
+
+
+	// Se invalida el frame.
+	invalidate_frame(fpn);
+
+	printf("FPN %i invalidado.\n", fpn);
+
+	fclose(fptr);
+
 }
