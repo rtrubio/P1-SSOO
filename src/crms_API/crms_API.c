@@ -18,9 +18,9 @@ void cr_mount(char* memory_path) {
 
 void cr_ls_processes() {
 
-	unsigned char valid_byte[1];
-	unsigned char pid[16][1];
-	unsigned char pname[16][13];
+	unsigned char valid_byte[1] = {0};
+	unsigned char pid[16][1] = {0};
+	unsigned char pname[16][13] = {0};
 
 	FILE *fptr = fopen(MEMORY_PATH, "rb");
 	int start = 0;
@@ -57,8 +57,8 @@ void cr_ls_processes() {
 void cr_start_process(int process_id, char* process_name) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "r+b");
-	unsigned char valid_byte[1];
-	unsigned char pid[1];
+	unsigned char valid_byte[1] = {0};
+	unsigned char pid[1] = {0};
 	int empty_space = 0;
 	int position = 0;
 
@@ -102,12 +102,9 @@ void cr_start_process(int process_id, char* process_name) {
 		se consideran solo los primeros 12. */
 
 		fseek(fptr, position + 2, SEEK_SET);
-		char *pname = malloc(sizeof(char) * (strlen(process_name) + 1));
+		char pname[12] = {0};
 		strcpy(pname, process_name);
-		if (strlen(process_name) > 12)
-			pname[12] = '\0';
-		fwrite(pname, strlen(pname), 1, fptr);
-		free(pname);
+		fwrite(pname, 12, 1, fptr);
 	}
 
 	fclose(fptr);
@@ -116,8 +113,8 @@ void cr_start_process(int process_id, char* process_name) {
 int find_process(int process_id) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "rb");
-	unsigned char valid_byte[1];
-	unsigned char pid[1];
+	unsigned char valid_byte[1] = {0};
+	unsigned char pid[1] = {0};
 
 	for (int i = 0; i < PCB_ENTRIES; i++) {
 		fseek(fptr, PCB_ENTRY_SIZE * i, SEEK_SET);
@@ -140,7 +137,7 @@ int find_file(int pcb_position, char* file_name) {
 
 	FILE *fptr = fopen(MEMORY_PATH, "rb");
 	char valid_byte[1];
-	char fname_bytes[13];
+	char fname_bytes[13] = {0};
 	fname_bytes[12] = '\0';
 
 	int position = PCB_ENTRY_SIZE * pcb_position + 14;
@@ -194,9 +191,9 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 			PCB_ENTRY_SIZE * pcb_position + 14 + 21 * file_position + 1,
 			SEEK_SET);
 
-		unsigned char fsize_bytes[4];
-		unsigned char vdir_bytes[4];
-		char fname_bytes[13];
+		unsigned char fsize_bytes[4] = {0};
+		unsigned char vdir_bytes[4] = {0};
+		char fname_bytes[13] = {0};
 		fname_bytes[12] = '\0';
 
 		fread(fname_bytes, 1, 12, fptr);
@@ -251,10 +248,10 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 
 int cr_exists(int process_id, char* file_name) {
 
-	unsigned char valid_byte[1];
-	unsigned char valid_file_byte[1];
-	unsigned char pid[1];
-	char filename[13]; // probar con 12
+	unsigned char valid_byte[1] = {0};
+	unsigned char valid_file_byte[1] = {0};
+	unsigned char pid[1] = {0};
+	char filename[13] = {0}; // probar con 12
 	filename[12] = '\0';
 
 	FILE *fptr = fopen(MEMORY_PATH, "rb");
@@ -307,13 +304,13 @@ int cr_exists(int process_id, char* file_name) {
 void cr_ls_files(int process_id) {
 
 	unsigned char valid_byte[1];
-	unsigned char valid_file_byte[1];
-	unsigned char pid[1];
-	unsigned char pname[13];
-	char filename[10][13];
-	unsigned long fsize[10];
-	unsigned long offset[10];
-	unsigned long vpn[10];
+	unsigned char valid_file_byte[1] = {0};
+	unsigned char pid[1] = {0};
+	unsigned char pname[13] = {0};
+	char filename[10][13] = {0};
+	unsigned long fsize[10] = {0};
+	unsigned long offset[10] = {0};
+	unsigned long vpn[10] = {0};
 
 	CrmsFile *file;
 
@@ -393,7 +390,7 @@ void min_offset(int pid, int vpn, unsigned long offset, unsigned long* w_offset)
 	unsigned long pos = PCB_ENTRY_SIZE * find_process(pid) + 14;
 	unsigned long min_offset = (1 << 23);
 	unsigned char valid_byte[1];
-	unsigned char vdir[10][4];
+	unsigned char vdir[10][4] = {0};
 	int n = 0;
 
 	for (int i = 0; i < 10; i++) {
@@ -437,8 +434,8 @@ void max_offset(int pid, int vpn, unsigned long* offset) {
 	unsigned long max_offset = 0;
 	int found = 0;
 	unsigned char valid_byte[1];
-	unsigned char vdir[10][4];
-	unsigned char size[10][4];
+	unsigned char vdir[10][4] = {0};
+	unsigned char size[10][4] = {0};
 	unsigned long size_ = 0;
 	int n = 0;
 
@@ -447,7 +444,6 @@ void max_offset(int pid, int vpn, unsigned long* offset) {
 		fread(valid_byte, 1, 1, fptr);
 
 		if (valid_byte[0]) {
-			printf("lole!!!\n");
 			fseek(fptr, 12, SEEK_CUR);
 			fread(size[n], 1, 4, fptr);
 			fread(vdir[n], 1, 4, fptr);
@@ -482,6 +478,8 @@ void max_offset(int pid, int vpn, unsigned long* offset) {
 
 int find_available_frame() {
 
+	int save = -1;
+
 	FILE *fptr = fopen(MEMORY_PATH, "r+b");
 
 	unsigned int x = 1;
@@ -495,19 +493,20 @@ int find_available_frame() {
 		fread(byte, 1, 1, fptr);
 		memcpy(temp, byte, 1);
 
+		printf("Frame %i-%i: %u\n", i*8, (i + 1)*8 - 1, byte[0]);
+
 		if (y) {
 			for (int k = 0; k < 8; k++) {
-				if (!(temp[0] & 1)) {
-					fclose(fptr);
-					return (i * 8 + k);
+				if (!((unsigned char)(temp[0] & (1 << (7 - k))) >> (7 - k)) && save == -1) {
+					printf("Frame available: %i\n", i * 8 + k);
+					save = i * 8 + k;
 				}
-				temp[0] = temp[0] >> 1;
 			}
 		}
 	}
 
 	fclose(fptr);
-	return -1;
+	return save;
 }
 
 void frame_page_association(int pid, int vpn, int fpn) {
@@ -519,9 +518,17 @@ void frame_page_association(int pid, int vpn, int fpn) {
 		PCB_ENTRY_SIZE * (find_process(pid) + 1) - PAGE_TABLE_SIZE,
 		SEEK_SET);
 
+	printf("I'm going to associate vpn %i with fpn %i\n", vpn, fpn);
+
 	fseek(fptr, vpn, SEEK_CUR);
-	
 	byte[0] = (unsigned char)(fpn) | (1 << 7);
+	fwrite(byte, 1, 1, fptr);
+
+	fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
+	fread(byte, 1, 1, fptr);
+	byte[0] = byte[0] | (1 << (7 - (fpn % 8)));
+
+	fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
 	fwrite(byte, 1, 1, fptr);
 
 	fclose(fptr);
@@ -533,10 +540,10 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 
 	int pentry = find_process(file->pid);
 	unsigned char valid_byte[1];
-	char fname[13];
+	char fname[13] = {0};
 	unsigned long fsize_bytes;
-	unsigned char vdir[4] = {0, 0, 0, 0};
-	unsigned char fsize[4];
+	unsigned char vdir[4] = {0};
+	unsigned char fsize[4] = {0};
 
 	if (!(file->allocated)) {
 		file->allocated = 1;
@@ -560,11 +567,6 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 				memcpy(fsize, &fsize_bytes, 4);
 
 				strcpy(fname, file->filename);
-				fname[12] = '\0';
-				int size_str = strlen(file->filename);
-
-				if (size_str > 12)
-					size_str = 12;
 
 				fseek(fptr,
 					PCB_ENTRY_SIZE * pentry + 14 + 21 * i,
@@ -575,7 +577,7 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 				fseek(fptr,
 					PCB_ENTRY_SIZE * pentry + 14 + 21 * i + 1,
 					SEEK_SET);
-				fwrite(fname, size_str, 1, fptr);
+				fwrite(fname, 12, 1, fptr);
 
 				fseek(fptr,
 					PCB_ENTRY_SIZE * pentry + 14 + 21 * i + 13,
@@ -851,14 +853,22 @@ void cr_finish_process(int process_id) {
 			fseek(fptr, position, SEEK_SET);
 			fwrite(byte, 1, 1, fptr);
 
-			fseek(fptr, (1 << 12) + (1 << 4) + fpn / 8, SEEK_SET);
+			fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
 			fread(byte, 1, 1, fptr);
 			mask = (1 << (7 - (fpn % 8)));
 			byte[0] = byte[0] ^ mask;
 
-			fseek(fptr, (1 << 12) + (1 << 4) + fpn / 8, SEEK_SET);
+			fseek(fptr, (1 << 12) + fpn / 8, SEEK_SET);
 			fwrite(byte, 1, 1, fptr);
 		}
+	}
+
+
+	byte[0] = 0;
+	for (int i = 0; i < 10; i++) {
+		position = PCB_ENTRY_SIZE * fentry + 14 + i * 21;
+		fseek(fptr, position, SEEK_SET);
+		fwrite(byte, 1, 1, fptr);
 	}
 
 	fseek(fptr, PCB_ENTRY_SIZE * fentry, SEEK_SET);
