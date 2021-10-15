@@ -1063,3 +1063,34 @@ void cr_delete_file(CrmsFile* file_desc) {
 	fclose(fptr);
 
 }
+
+int os_read(CrmsFile* file_desc, void* buffer, int n_bytes){
+	
+	if (file_desc->mode != 'r') {
+		printf("El archivo %s es de solo lectura.\n", file_desc->filename);
+		return 0;
+	}
+
+	int pentry = find_process(file_desc->pid);
+
+	if (pentry == -1) {
+		printf("El proceso de ID %i ya no se encuentra activo.\n", file_desc->pid);
+		return 0;
+	}
+
+    int fentry = find_file(pentry, file_desc->filename); 
+
+	if (fentry == -1 && file_desc->allocated) {
+		printf("El archivo ya no existe.\n");
+		file_desc->allocated = 0;
+		return 0;
+	} 
+
+	FILE *fptr = fopen(MEMORY_PATH, "r+b");
+	CrmsFile* file=  cr_open(file_desc->pid, file_desc->filename, "r");
+
+	get_fpn(unsigned char byte)
+	valid_page_entry(unsigned char byte)
+	
+}
+
