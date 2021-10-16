@@ -1,9 +1,7 @@
 #include <stdio.h>
 
-extern char MEMORY_PATH[256];
-extern size_t PCB_ENTRY_SIZE;
-extern size_t PCB_ENTRIES;
-extern size_t PAGE_TABLE_SIZE;
+extern char MEMORY_PATH[1024];
+extern int CR_ERROR;
 
 typedef struct CrmsFile {
 	int pid;
@@ -15,6 +13,14 @@ typedef struct CrmsFile {
 	int allocated;
 } CrmsFile;
 
+enum {
+	ALREADY_EXISTS,
+	NOT_FOUND,
+	OUT_OF_MEMORY,
+	NO_AVAILABLE_ENTRY,
+	MODE_ERROR
+};
+
 void cr_mount(char*);
 void cr_ls_processes();
 void cr_start_process(int, char*);
@@ -24,5 +30,6 @@ void cr_ls_files(int);
 int cr_exists(int, char*);
 void cr_finish_process(int);
 void cr_delete_file(CrmsFile*);
-void invalidate_frame(int);
 int cr_read(CrmsFile*, void*, int);
+void cr_close(CrmsFile*);
+void cr_strerror(int);

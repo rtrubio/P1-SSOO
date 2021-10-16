@@ -5,12 +5,15 @@
 #include <stdint.h>
 #include "crms_API.h"
 
-char MEMORY_PATH[256];
+char MEMORY_PATH[1024];
+int CR_ERROR = -1;
+
 size_t PCB_ENTRY_SIZE = 256;
 size_t PCB_ENTRIES = 16;
 size_t PAGE_TABLE_SIZE = 32;
-size_t FILE_DATA_ENTRY_SIZE = 21; // 1+12+4+4=validez+nombre+tamaño+dir
+size_t FILE_DATA_ENTRY_SIZE = 21;
 size_t FILE_DATA_ENTRIES = 10;
+
 
 void cr_mount(char* memory_path) {
 	strcpy(MEMORY_PATH, memory_path);
@@ -41,8 +44,10 @@ void cr_ls_processes() {
 	}
 	fclose(fptr);
 
-	if (!n)
+	if (!n) {
+		CR_ERROR = NOT_FOUND;
 		printf("No hay procesos ejecutando actualmente.\n");
+	}
 	else {
 		printf("\n");
 		printf("Procesos activos:\n\n");
@@ -73,6 +78,7 @@ void cr_start_process(int process_id, char* process_name) {
 		else if (valid_byte[0]) {
 			fread(pid, 1, 1, fptr);
 			if ((int)(pid[0]) == process_id) {
+				CR_ERROR = ALREADY_EXISTS;
 				printf("Ya existe un proceso con ID %i.\n", process_id);
 				empty_space = -1;
 				break;
@@ -81,8 +87,10 @@ void cr_start_process(int process_id, char* process_name) {
 		position += 256;
 	}
 
-	if (!empty_space)
+	if (!empty_space) {
+		CR_ERROR = NO_AVAILABLE_ENTRY;
 		printf("No hay espacio para más procesos.\n");
+	}
 
 	/* Si se encuentra un espacio vacío y el ID es válido,
 	se crea la entrada en la tabla de PCB */
@@ -178,13 +186,13 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 
 	int pcb_position = find_process(process_id);
 	if (pcb_position == -1) {
-		printf("No existe un proceso con ID %i.\n", process_id);
+		CR_ERROR = NOT_FOUND;
 		return 0;
 	}
 
 	int file_position = find_file(pcb_position, file_name);
 	
-	if (mode == 'r' && file_position != -1) {
+	if (file_position != -1) {
 		FILE *fptr = fopen(MEMORY_PATH, "rb");
 
 		fseek(fptr,
@@ -216,7 +224,7 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 		file->filesize = file_size;
 		file->vpn = vpn;
 		file->offset = offset;
-		file->mode = 'r';
+		file->mode = mode;
 		file->allocated = 1;
 
 		fclose(fptr);
@@ -224,26 +232,44 @@ CrmsFile* cr_open(int process_id, char* file_name, char mode) {
 	}
 
 	if (mode == 'r' && file_position == -1) {
-		printf("El proceso de ID %i no posee un archivo de nombre %s.\n",
-			process_id, file_name);
+		CR_ERROR = NOT_FOUND;
 		return 0;
 	}
 
 	if (mode == 'w' && file_position == -1) {
 
-		CrmsFile *file = malloc(sizeof(CrmsFile));
-		file->pid = process_id;
-		file->filename = file_name;
-		file->mode = 'w';
-		file->allocated = 0;
-		return file;
+		FILE *fptr = fopen(MEMORY_PATH, "rb");
+		unsigned char byte_[1];
+		int found_ = 0;
+
+		for (int i = 0; i < 10; i++) {
+			fseek(fptr,
+			PCB_ENTRY_SIZE * pcb_position + 14 + 21 * i,
+			SEEK_SET);
+
+			fread(byte_, 1, 1, fptr);
+			if (!(byte_[0])) {
+				found_ = 1;
+				break;
+			}
+		}
+
+		if (found_) {
+			CrmsFile *file = malloc(sizeof(CrmsFile));
+			file->pid = process_id;
+			file->filename = file_name;
+			file->mode = mode;
+			file->allocated = 0;
+			fclose(fptr);
+			return file;
+		} else {
+			CR_ERROR = NO_AVAILABLE_ENTRY;
+			fclose(fptr);
+			return 0;
+		}
 	}
 
-	if (mode == 'w' && file_position != -1) {
-
-		printf("El archivo ya existe y no se puede escribir.\n");
-		return 0;
-	}
+	return 0;
 }
 
 int cr_exists(int process_id, char* file_name) {
@@ -358,8 +384,10 @@ void cr_ls_files(int process_id) {
 	}
 	fclose(fptr);
 
-	if (!n)
+	if (!n) {
+		CR_ERROR = NOT_FOUND;
 		printf("No hay archivos para el proceso %i actualmente.\n\n", process_id);
+	}
 	else {
 		printf("\n");
 		printf("Archivos de %s [ID %i]:\n\n", pname, process_id);
@@ -493,12 +521,9 @@ int find_available_frame() {
 		fread(byte, 1, 1, fptr);
 		memcpy(temp, byte, 1);
 
-		printf("Frame %i-%i: %u\n", i*8, (i + 1)*8 - 1, byte[0]);
-
 		if (y) {
 			for (int k = 0; k < 8; k++) {
 				if (!((unsigned char)(temp[0] & (1 << (7 - k))) >> (7 - k)) && save == -1) {
-					printf("Frame available: %i\n", i * 8 + k);
 					save = i * 8 + k;
 				}
 			}
@@ -517,8 +542,6 @@ void frame_page_association(int pid, int vpn, int fpn) {
 	fseek(fptr,
 		PCB_ENTRY_SIZE * (find_process(pid) + 1) - PAGE_TABLE_SIZE,
 		SEEK_SET);
-
-	printf("I'm going to associate vpn %i with fpn %i\n", vpn, fpn);
 
 	fseek(fptr, vpn, SEEK_CUR);
 	byte[0] = (unsigned char)(fpn) | (1 << 7);
@@ -589,8 +612,6 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 					SEEK_SET);
 				fwrite(vdir, 4, 1, fptr);
 
-				printf("Offset %lu, VPN %i\n", offset, vpn);
-
 				break;
 			}
 		}
@@ -599,7 +620,7 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 		int position = find_file(find_process(file->pid), file->filename);
 
 		if (position == -1) {
-			printf("El archivo ya no existe.\n");
+			CR_ERROR = NOT_FOUND;
 		}
 
 		fseek(fptr,
@@ -618,7 +639,7 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 
 			fwrite(fsize, 4, 1, fptr);
 		} else {
-			printf("El archivo ya no existe.\n");
+			CR_ERROR = NOT_FOUND;
 		}
 
 	}
@@ -629,25 +650,25 @@ void write_file_entry(CrmsFile* file, int vpn, unsigned long offset) {
 int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 
 	if (file_desc->mode != 'w') {
-		printf("El archivo %s es de solo lectura.\n", file_desc->filename);
+		CR_ERROR = MODE_ERROR;
 		return 0;
 	}
 
 	int pentry = find_process(file_desc->pid);
 
 	if (pentry == -1) {
-		printf("El proceso de ID %i ya no se encuentra activo.\n", file_desc->pid);
+		CR_ERROR = NOT_FOUND;
 		return 0;
 	}
 
 	if (find_file(pentry, file_desc->filename) == -1 && file_desc->allocated) {
-		printf("El archivo ya no existe.\n");
+		CR_ERROR = NOT_FOUND;
 		file_desc->allocated = 0;
 		return 0;
 	} 
 
 	if (find_file(pentry, file_desc->filename) != -1 && file_desc->allocated == 0) {
-		printf("Ya existe un archivo de nombre %s.\n", file_desc->filename);
+		CR_ERROR = ALREADY_EXISTS;
 		return 0;
 	}
 
@@ -667,14 +688,11 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		for (int i = 0; i < PAGE_TABLE_SIZE; i++) {
 			fseek(fptr, position + i, SEEK_SET);
 			fread(byte, 1, 1, fptr);
-
-			printf("Página número %i libre:", i);
 			
 			if (!valid_page_entry(byte[0])) {
-				printf(" sí.\n");
 				first_empty_vp = i;
 				break;
-			} else printf(" no.\n");
+			}
 		}
 
 		if (first_empty_vp != 0) {
@@ -704,7 +722,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		}
 
 		if (vpn >= 32) {
-			printf("No queda memoria virtual.\n");
+			CR_ERROR = NO_AVAILABLE_ENTRY;
 			return 0;
 		}
 
@@ -720,7 +738,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		else {
 			fpn = find_available_frame();
 			if (fpn == -1) {
-				printf("No quedan frames disponibles.\n");
+				CR_ERROR = OUT_OF_MEMORY;
 				fclose(fptr);
 				return 0;
 			} else {
@@ -739,7 +757,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 			file_desc->vpn, file_desc->offset, &limit);
 
 		if (limit == file_desc->offset) {
-			printf("No queda espacio contiguo en la memoria.");
+			CR_ERROR = NO_AVAILABLE_ENTRY;
 			fclose(fptr);
 			return 0;
 		}
@@ -775,7 +793,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 			vpn++;
 
 			if (limit < (1 << 23) || vpn >= 32) {
-				printf("No queda memoria contigua.\n");
+				CR_ERROR = NO_AVAILABLE_ENTRY;
 				write_file_entry(file_desc, start_vpn, start_offset);
 				file_desc->allocated = 1;
 				fclose(fptr);
@@ -799,7 +817,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 				if (limit == 0) {
 					write_file_entry(file_desc, start_vpn, start_offset);
 					file_desc->allocated = 1;
-					printf("No queda memoria contigua.\n");
+					CR_ERROR = NO_AVAILABLE_ENTRY;
 					fclose(fptr);
 					return written;
 				}
@@ -810,7 +828,7 @@ int cr_write_file(CrmsFile* file_desc, void* buffer, int n_bytes) {
 				if (fpn == -1) {
 					write_file_entry(file_desc, start_vpn, start_offset);
 					file_desc->allocated = 1;
-					printf("No quedan frames disponibles.\n");
+					CR_ERROR = OUT_OF_MEMORY;
 					fclose(fptr);
 					return written;
 				}
@@ -836,7 +854,7 @@ void cr_finish_process(int process_id) {
 	unsigned char mask;
 
 	if (pentry == -1) {
-		printf("No existe un proceso con ID %i\n", process_id);
+		CR_ERROR = NOT_FOUND;
 		return;
 	}
 
@@ -896,17 +914,13 @@ void invalidate_frame(int fpn) {
 
 void cr_delete_file(CrmsFile* file_desc) {
 
-	// Restricciones
-	/*
 	if (file_desc->mode != 'w') {
-		printf("El archivo %s [PID = %i] está abierto en solo lectura.\n",
-			file_desc->filename, file_desc->pid);
+		CR_ERROR = MODE_ERROR;
 		return;
-	}*/
+	}
 
 	if (!(file_desc->allocated)) {
-		printf("El archivo %s [PID = %i] no se ha escrito en memoria aún.\n",
-			file_desc->filename, file_desc->pid);
+		CR_ERROR = NOT_FOUND;
 	}
 
 	FILE *fptr = fopen(MEMORY_PATH, "r+b");
@@ -915,8 +929,6 @@ void cr_delete_file(CrmsFile* file_desc) {
 	// Ídem para el número de entrada del archivo dentro del proceso.
 	int pentry = find_process(file_desc->pid);
 	int fentry = find_file(pentry, file_desc->filename);	
-
-	printf("pentry %i, fentry %i\n", pentry, fentry);
 
 
 	// Se invalida la entrada del archivo en el proceso.
@@ -953,7 +965,6 @@ void cr_delete_file(CrmsFile* file_desc) {
 	// si existen)
 
 	int occupying = (offset + file_size) / (1 << 23); // (1 << 23) = 2^23 = 8MiB
-	unsigned long residue = (offset + file_size) % (1 << 23);
 	unsigned long upper_bound, lower_bound;
 	int temp_fpn;
 
@@ -969,8 +980,6 @@ void cr_delete_file(CrmsFile* file_desc) {
 
 			temp_fpn = get_fpn(byte[0]);
 			invalidate_frame(temp_fpn);
-
-			printf("FPN %i invalidado.\n", temp_fpn);
 			
 			fseek(fptr,
 				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + i,
@@ -994,8 +1003,6 @@ void cr_delete_file(CrmsFile* file_desc) {
 			temp_fpn = get_fpn(byte[0]);
 			invalidate_frame(temp_fpn);
 
-			printf("FPN %i invalidado.\n", temp_fpn);
-
 			fseek(fptr,
 				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn + occupying,
 				SEEK_SET);
@@ -1011,7 +1018,7 @@ void cr_delete_file(CrmsFile* file_desc) {
 		min_offset(file_desc->pid, vpn, 0, &upper_bound);
 
 		if (upper_bound < (1 << 23)) {
-			printf("There still are files in VPN %i\n", vpn);
+			fclose(fptr);
 			return;
 		}
 	}
@@ -1031,11 +1038,10 @@ void cr_delete_file(CrmsFile* file_desc) {
 	if (lower_bound) {
 		int cur_vpn = vpn - (k - 1);
 		if (lower_bound > (vpn - cur_vpn) * (1 << 23)) {
-			printf("There still are files in VPN %i\n", vpn);
+			fclose(fptr);
 			return;
 		}
 	}
-	printf("There are no more files in VPN %i.\n", vpn);
 
 
 	// Si nada de esto pasa, hay que invalidar el frame y la página.
@@ -1057,8 +1063,6 @@ void cr_delete_file(CrmsFile* file_desc) {
 
 	// Se invalida el frame.
 	invalidate_frame(fpn);
-
-	printf("FPN %i invalidado.\n", fpn);
 
 	fclose(fptr);
 }
@@ -1112,7 +1116,6 @@ int cr_read(CrmsFile* file_desc, void* buffer, int n_bytes) {
 
 		// Se lee 1 byte
 		fread(byte, 1, 1, fptr);
-		printf("byte: %i %c\n", read, byte[0]);
 		read++;
 		cur_position++;
 		file_desc->offset += 1;
@@ -1122,8 +1125,10 @@ int cr_read(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		memcpy(buffer + read - 1, byte, 1);
 
 
-		if (read == n_bytes)
+		if (read == n_bytes) {
+			fclose(fptr);
 			return read;
+		}
 
 		// Verificar si llegamos al final de una página.
 		if (cur_position == (1 << 23)) {
@@ -1146,10 +1151,34 @@ int cr_read(CrmsFile* file_desc, void* buffer, int n_bytes) {
 		}
 
 		else if (cur_position == upper_bound) {
+			fclose(fptr);
 			return read;
 		}
 
 	}
 
 	fclose(fptr);
+}
+
+void cr_close(CrmsFile* file_desc) {
+	free(file_desc);
+}
+
+void cr_strerror(int e) {
+
+	if (e == ALREADY_EXISTS)
+		printf("Se ha tratado de escribir un archivo o una entrada que ya existe.\n");
+
+	if (e == NOT_FOUND)
+		printf("No se ha encontrado lo que se buscaba.\n");
+
+	if (e == OUT_OF_MEMORY)
+		printf("Se ha acabado la memoria real; i.e. no quedan frames disponibles.\n");
+
+	if (e == NO_AVAILABLE_ENTRY)
+		printf("Se ha tratado de escribir una entrada pero no quedan espacios disponibles.\n");
+
+	if (e == MODE_ERROR)
+		printf("Se ha tratado de escribir un archivo en modo lectura o viceversa.\n");
+
 }

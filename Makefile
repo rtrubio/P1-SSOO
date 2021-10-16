@@ -48,7 +48,7 @@ LIB=$(GTK) $(MTH)
 COMMON=crms_API
 
 # Directorios que serán compilados a un programa
-PROGRAMS=test
+PROGRAMS=main
 
 # Todos los directorios que contienen archivos de código
 SRCDIR=$(COMMON) $(PROGRAMS)
