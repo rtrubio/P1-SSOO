@@ -24,3 +24,5 @@ void cr_ls_files(int);
 int cr_exists(int, char*);
 void cr_finish_process(int);
 void cr_delete_file(CrmsFile*);
+void invalidate_frame(int);
+int cr_read(CrmsFile*, void*, int);

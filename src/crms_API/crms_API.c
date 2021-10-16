@@ -1017,7 +1017,7 @@ void cr_delete_file(CrmsFile* file_desc) {
 	}
 
 	// Revisamos si hay un archivo abajo en la misma página.
-	// Puede ser que no comienze en esta página, así que hay que buscar
+	// Puede ser que no comience en esta página, así que hay que buscar
 	// en las páginas de abajo.
 
 	lower_bound = 0;
@@ -1061,5 +1061,95 @@ void cr_delete_file(CrmsFile* file_desc) {
 	printf("FPN %i invalidado.\n", fpn);
 
 	fclose(fptr);
+}
 
+int cr_read(CrmsFile* file_desc, void* buffer, int n_bytes) {
+
+	if (n_bytes < 1)
+		return n_bytes;
+
+	if (file_desc->filesize == 0)
+		return n_bytes;
+
+	FILE *fptr = fopen(MEMORY_PATH, "rb");
+
+	// VPN, offset y filesize
+	int vpn = file_desc->vpn;
+	unsigned long offset = file_desc->offset;
+	unsigned long size = file_desc->filesize;
+	int pentry = find_process(file_desc->pid);
+	unsigned char byte[1];
+	int fpn;
+
+	// Vemos donde termina el archivo
+	int end_vpn = vpn + (size + offset) / (1 << 23);
+	unsigned long end_offset = (size + offset) & (1 << 23);
+
+	// Vamos al inicio de la tabla de páginas + vpn
+	fseek(fptr,
+		PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+		SEEK_SET);	
+
+	// Se lee la entrada de la tabla de páginas
+	fread(byte, 1, 1, fptr);
+	fpn = get_fpn(byte[0]); // Ahora tenemos el número de frame
+
+	int read = 0;
+	unsigned long upper_bound = (1 << 23);
+	unsigned long cur_position = offset;
+
+	if (vpn == end_vpn)
+		upper_bound = end_offset;
+
+	// Empezamos a leer
+	while (1) {
+
+		// Nos movemos al frame en la memoria,
+		// 2^12 + 2^4 + 2^23 * (número de frame) + offset
+		fseek(fptr,
+			(1 << 12) + (1 << 4) + (1 << 23) * fpn + cur_position,
+			SEEK_SET);	
+
+		// Se lee 1 byte
+		fread(byte, 1, 1, fptr);
+		printf("byte: %i %c\n", read, byte[0]);
+		read++;
+		cur_position++;
+		file_desc->offset += 1;
+		file_desc->filesize -= 1;
+
+		// Se copia 1 byte al buffer
+		memcpy(buffer + read - 1, byte, 1);
+
+
+		if (read == n_bytes)
+			return read;
+
+		// Verificar si llegamos al final de una página.
+		if (cur_position == (1 << 23)) {
+			file_desc->offset = 0;
+			file_desc->vpn += 1;
+			vpn++;
+
+			if (vpn == end_vpn) {
+				upper_bound = end_offset;
+			} else {
+				upper_bound = (1 << 23);
+			}
+
+			fseek(fptr,
+				PCB_ENTRY_SIZE * (pentry + 1) - PAGE_TABLE_SIZE + vpn,
+				SEEK_SET);
+			fread(byte, 1, 1, fptr);
+			fpn = get_fpn(byte[0]);
+			cur_position = 0;
+		}
+
+		else if (cur_position == upper_bound) {
+			return read;
+		}
+
+	}
+
+	fclose(fptr);
 }
