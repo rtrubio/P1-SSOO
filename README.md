@@ -21,4 +21,4 @@ El filesize, offset y vpn pueden cambiar durante la escritura y lectura; por lo 
 Para el resto de los elementos como Tabla de PCB's, Tabla de Páginas, Frame Bitmap y Frame no se definieron como structs, sino que se trabajó directamente con sus respectivos bytes de memoria, por lo que sus modificaciones quedan directamente plasmadas en el .bin
 
 ## Supuestos
-
+Un archivo no puede escribirse ni borrarse en modo lectura, así como un archivo no puede leerse en modo escritura.
